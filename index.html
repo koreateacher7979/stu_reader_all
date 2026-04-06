@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>실시간 개표 대시보드</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;800&display=swap');
+        body { font-family: 'Pretendard', sans-serif; background-color: #f8fafc; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .candidate-card { transition: all 0.3s ease; }
+        .candidate-card:hover { transform: translateY(-5px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        .count-btn { transition: transform 0.1s active; }
+        .count-btn:active { transform: scale(0.9); }
+    </style>
+</head>
+<body class="h-screen overflow-hidden flex flex-col">
+
+    <!-- 상단 고정 문구 -->
+    <header class="bg-indigo-900 text-white py-2 px-4 flex justify-between items-center shadow-md">
+        <h1 class="text-lg font-bold">🗳️ 실시간 학급 선거 개표 시스템</h1>
+        <p class="text-xs opacity-80">개발자: 가치있는 미래교육연구소 대표 김병찬</p>
+    </header>
+
+    <!-- 설정바 -->
+    <div id="config-bar" class="bg-white border-b p-3 flex flex-wrap gap-3 items-center shadow-sm">
+        <input type="text" id="ss-url" placeholder="구글 스프레드시트 URL을 입력하세요" 
+               class="flex-1 min-w-[300px] border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+        
+        <div class="flex items-center gap-2">
+            <select id="grade" class="border rounded px-2 py-2 text-sm">
+                <option value="">학년 선택</option>
+                <script>for(let i=1;i<=6;i++) document.write(`<option value="${i}">${i}학년</option>`)</script>
+            </select>
+            <select id="classNum" class="border rounded px-2 py-2 text-sm">
+                <option value="">반 선택</option>
+                <script>for(let i=1;i<=15;i++) document.write(`<option value="${i}">${i}반</option>`)</script>
+            </select>
+        </div>
+
+        <button onclick="loadCandidates()" id="load-btn" class="bg-indigo-600 text-white px-5 py-2 rounded text-sm font-semibold hover:bg-indigo-700 transition">
+            데이터 불러오기
+        </button>
+    </div>
+
+    <!-- 메인 대시보드 구역 -->
+    <main class="flex-1 flex overflow-hidden p-4 gap-4">
+        
+        <!-- 좌측: 후보자 명부 -->
+        <section class="w-1/3 flex flex-col bg-white rounded-xl border shadow-sm overflow-hidden">
+            <div class="bg-slate-100 p-3 font-bold border-b text-slate-700">📋 후보자 명부</div>
+            <div class="flex-1 overflow-y-auto p-0">
+                <table class="w-full text-sm text-left border-collapse">
+                    <thead class="bg-slate-50 sticky top-0">
+                        <tr>
+                            <th class="p-3 border-b">기호</th>
+                            <th class="p-3 border-b">이름</th>
+                            <th class="p-3 border-b">분야</th>
+                        </tr>
+                    </thead>
+                    <tbody id="candidate-list">
+                        <tr>
+                            <td colspan="3" class="p-10 text-center text-slate-400">데이터를 먼저 불러와주세요.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 우측: 개표 현황 (카드형) -->
+        <section class="w-2/3 flex flex-col">
+            <div class="flex justify-between items-center mb-3">
+                <h2 class="text-xl font-extrabold text-slate-800">📊 실시간 개표 현황</h2>
+                <div id="status-badge" class="px-3 py-1 rounded-full bg-slate-200 text-slate-600 text-xs font-bold uppercase tracking-wider">대기 중</div>
+            </div>
+            
+            <div id="vote-board" class="flex-1 overflow-y-auto grid grid-cols-2 lg:grid-cols-3 gap-4 no-scrollbar">
+                <!-- 동적 생성 카드 -->
+            </div>
+        </section>
+    </main>
+
+    <!-- 하단 제어바 -->
+    <footer class="bg-white border-t p-4 flex justify-center gap-4">
+        <button id="start-btn" onclick="startVoting()" disabled class="bg-green-600 text-white px-8 py-3 rounded-lg font-bold opacity-50 cursor-not-allowed transition">
+            투표 시작
+        </button>
+        <button id="end-btn" onclick="endVoting()" style="display:none;" class="bg-red-600 text-white px-8 py-3 rounded-lg font-bold hover:bg-red-700 transition">
+            투표 종료
+        </button>
+        <button id="submit-btn" onclick="submitResults()" style="display:none;" class="bg-blue-600 text-white px-8 py-3 rounded-lg font-bold hover:bg-blue-700 animate__animated animate__pulse animate__infinite">
+            결과 전송하기
+        </button>
+    </footer>
+
+    <!-- 로딩 모달 -->
+    <div id="loading" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-lg shadow-xl text-center">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+            <p class="font-medium">처리 중입니다...</p>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * Canvas 미리보기 환경 대응: google 객체가 없을 경우에만 예시 데이터를 사용합니다.
+         * 실제 구글 시트 배포 시(Web App 실행 시)에는 이 코드가 무시되고 실제 데이터를 가져옵니다.
+         */
+        if (typeof google === 'undefined' || !google.script) {
+            window.google = {
+                script: {
+                    run: {
+                        withSuccessHandler: function(callback) { this.successHandler = callback; return this; },
+                        withFailureHandler: function(callback) { this.failureHandler = callback; return this; },
+                        getCandidates: function(url) {
+                            setTimeout(() => {
+                                const mockData = [
+                                    { category: '반장(예시)', number: 1, name: '예시_김수진', gender: '여', promise: '예시 데이터입니다. 실제 배포 후 확인하세요.' },
+                                    { category: '반장(예시)', number: 2, name: '예시_김우빈', gender: '남', promise: '실제 데이터를 불러오려면 배포가 필요합니다.' }
+                                ];
+                                if (this.successHandler) this.successHandler(mockData);
+                            }, 800);
+                        },
+                        saveResults: function() { if (this.successHandler) this.successHandler("예시 저장 성공"); }
+                    }
+                }
+            };
+        }
+
+        let candidates = [];
+        let isVoting = false;
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'flex' : 'none';
+        }
+
+        function loadCandidates() {
+            const url = document.getElementById('ss-url').value;
+            const g = document.getElementById('grade').value;
+            const c = document.getElementById('classNum').value;
+
+            showLoading(true);
+            google.script.run
+                .withSuccessHandler((data) => {
+                    candidates = data.map(item => ({...item, votes: 0}));
+                    renderCandidates();
+                    renderBoard();
+                    document.getElementById('start-btn').disabled = false;
+                    document.getElementById('start-btn').classList.remove('opacity-50', 'cursor-not-allowed');
+                    showLoading(false);
+                })
+                .withFailureHandler((err) => {
+                    alert("에러: " + err.message + "\n구글 시트 배포 상태를 확인해주세요.");
+                    showLoading(false);
+                })
+                .getCandidates(url);
+        }
+
+        function renderCandidates() {
+            const list = document.getElementById('candidate-list');
+            list.innerHTML = candidates.map(c => `
+                <tr class="hover:bg-slate-50 border-b">
+                    <td class="p-3 font-bold text-indigo-600">${c.number}</td>
+                    <td class="p-3 font-semibold">${c.name} (${c.gender})</td>
+                    <td class="p-3 text-slate-500">${c.category}</td>
+                </tr>
+            `).join('');
+        }
+
+        function renderBoard() {
+            const board = document.getElementById('vote-board');
+            board.innerHTML = candidates.map((c, idx) => `
+                <div class="candidate-card bg-white rounded-xl border-2 p-4 flex flex-col justify-between ${isVoting ? 'border-indigo-100 shadow-md' : 'border-slate-100'}">
+                    <div>
+                        <div class="flex justify-between items-start mb-2">
+                            <span class="bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-xs font-bold">기호 ${c.number}</span>
+                            <span class="text-slate-400 text-xs">${c.category}</span>
+                        </div>
+                        <h3 class="text-xl font-extrabold text-slate-800 mb-1">${c.name}</h3>
+                        <p class="text-xs text-slate-500 line-clamp-2" title="${c.promise}">${c.promise}</p>
+                    </div>
+                    
+                    <div class="mt-4 flex items-center justify-between">
+                        <div class="text-3xl font-black text-indigo-600" id="v-${idx}">${c.votes}</div>
+                        ${isVoting ? `
+                            <button onclick="updateVote(${idx}, 1)" class="count-btn bg-indigo-600 text-white w-12 h-12 rounded-full flex items-center justify-center text-2xl shadow-lg hover:bg-indigo-700">
+                                +
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateVote(idx, amount) {
+            candidates[idx].votes += amount;
+            const el = document.getElementById(`v-${idx}`);
+            el.innerText = candidates[idx].votes;
+            el.classList.add('animate__animated', 'animate__bounceIn');
+            setTimeout(() => el.classList.remove('animate__animated', 'animate__bounceIn'), 500);
+        }
+
+        function startVoting() {
+            isVoting = true;
+            document.getElementById('status-badge').innerText = "투표 진행 중";
+            document.getElementById('status-badge').classList.replace('bg-slate-200', 'bg-green-100');
+            document.getElementById('status-badge').classList.add('text-green-700');
+            document.getElementById('start-btn').style.display = 'none';
+            document.getElementById('end-btn').style.display = 'block';
+            document.getElementById('config-bar').classList.add('opacity-50', 'pointer-events-none');
+            renderBoard();
+        }
+
+        function endVoting() {
+            isVoting = false;
+            document.getElementById('status-badge').innerText = "개표 마감";
+            document.getElementById('status-badge').classList.replace('bg-green-100', 'bg-red-100');
+            document.getElementById('status-badge').classList.add('text-red-700');
+            document.getElementById('end-btn').style.display = 'none';
+            document.getElementById('submit-btn').style.display = 'block';
+            renderBoard();
+        }
+
+        function submitResults() {
+            const url = document.getElementById('ss-url').value;
+            const g = document.getElementById('grade').value;
+            const c = document.getElementById('classNum').value;
+
+            showLoading(true);
+            google.script.run
+                .withSuccessHandler((msg) => {
+                    showLoading(false);
+                    alert("성공적으로 서버에 전송되었습니다.\n" + msg);
+                    location.reload();
+                })
+                .withFailureHandler((err) => {
+                    showLoading(false);
+                    alert("실패: " + err.message);
+                })
+                .saveResults(url, g, c, candidates);
+        }
+    </script>
+</body>
+</html>
